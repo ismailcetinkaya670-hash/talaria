@@ -1,8 +1,4 @@
-  ______      __           _      
- /_  __/___ _/ /___ ______(_)___ _
-  / / / __ `/ / __ `/ ___/ / __ `/
- / / / /_/ / / /_/ / /  / / /_/ / 
-/_/  \__,_/_/\__,_/_/  /_/\__,_/  
+
 
 # Talaria - Linux Privilege Escalation Scanner
 
@@ -19,6 +15,8 @@ Crosscheck module : this module looks for each finding from prior scans and make
 This scanner also mainly focues on lateral movement and privilege escalation checks for ways to go for other users .
 
 I have added stealth mode and some jitter but honestly it doesn't do much of a difference in real life scenarios but it is fun to have .
+
+You can look for screenshots from the example scan in tryhackme linux privesc room in screenshots directory
 
 
 ## Features
@@ -80,14 +78,6 @@ Talaria is created for educational purposes, Capture The Flag (CTF) events,audit
 ## License
 Distributed under the MIT License. See `LICENSE` for more information.
 
-
--------------------------------------------------------------------- SOME EXAMPLE SCREENSHOTS --------------------------------------------------------------------
-
-These screenshots are taken from tryhackme common linux privesc room as a example scan completed in 6 !! seconds
-
-![Scan example 1](screenshots/scan1.png)
-![Scan example 2](screenshots/scan2.png)
-![Scan example 3](screenshots/scan1.png)
 
 
 
