@@ -192,73 +192,59 @@ func ScanSystemdTimers() ([]SystemdTimerResult, error) {
 
 			// We care about .timer and .service files
 			if !d.IsDir() && (strings.HasSuffix(d.Name(), ".timer") || strings.HasSuffix(d.Name(), ".service")) {
-				
-				// Helper to check if a file/link is writeable
-				checkWriteable := func(fpath string, isLink bool) (bool, string) {
-					var info os.FileInfo
-					var err error
-					if isLink {
-						info, err = os.Lstat(fpath)
-					} else {
-						info, err = os.Stat(fpath)
-					}
-					
+
+				// Helper to check if a REAL file (not symlink) is writable by us
+				checkWriteable := func(fpath string) (bool, string) {
+					info, err := os.Stat(fpath) // Stat follows symlinks — gives us target perms
 					if err != nil {
 						return false, ""
 					}
-
 					stat, ok := info.Sys().(*syscall.Stat_t)
 					if !ok {
 						return false, ""
 					}
-
-					// 1. World Writeable
 					if info.Mode()&0002 != 0 {
 						return true, "world-writeable"
 					}
-					// 2. Owner Writeable
 					if int(stat.Uid) == uid && info.Mode()&0200 != 0 {
 						return true, "owner-writeable"
 					}
-					// 3. Group Writeable
 					if userGids[int(stat.Gid)] && info.Mode()&0020 != 0 {
 						return true, "group-writeable"
 					}
-
 					return false, ""
 				}
 
-				// Check the link/file itself this might give us other ways to escalate privileges .
 				info, err := d.Info()
 				if err != nil {
 					return nil
 				}
 
-				isSymlink := (info.Mode()&os.ModeSymlink != 0)
-				writeable, reason := checkWriteable(p, isSymlink)
+				isSymlink := (info.Mode() & os.ModeSymlink) != 0
 
-				if writeable {
-					msg := "Writeable systemd unit file"
-					if isSymlink {
-						msg = "Writeable systemd symlink"
-					}
-					results = append(results, SystemdTimerResult{
-						Path:        p,
-						IsDangerous: true,
-						Reason:      fmt.Sprintf("%s (%s)", msg, reason),
-					})
-				} else if isSymlink {
-					// If the link itself isn't writeable, check the target for more information
+				if isSymlink {
+					// IMPORTANT: Linux symlink permission bits are ALWAYS 0777 (lrwxrwxrwx).
+					// Checking Lstat on a symlink will ALWAYS report world-writable — this is a
+					// kernel invariant and a classic false positive source.
+					// Instead: check if the symlink TARGET is writable (that's the real risk).
 					targetPath, err := filepath.EvalSymlinks(p)
-					if err == nil && targetPath != p {
-						writeableTarget, reasonTarget := checkWriteable(targetPath, false)
-						if writeableTarget {
+					if err == nil && targetPath != p && targetPath != "/dev/null" {
+						if writable, reason := checkWriteable(targetPath); writable {
 							results = append(results, SystemdTimerResult{
 								Path:        p,
 								IsDangerous: true,
-								Reason:      fmt.Sprintf("Systemd unit points to a writeable target: %s (%s)", targetPath, reasonTarget),
+								Reason:      fmt.Sprintf("Systemd symlink target is writable: %s (%s)", targetPath, reason),
 							})
 						}
+					}
+				} else {
+					// Real file — check directly
+					if writable, reason := checkWriteable(p); writable {
+						results = append(results, SystemdTimerResult{
+							Path:        p,
+							IsDangerous: true,
+							Reason:      fmt.Sprintf("Writable systemd unit file (%s)", reason),
+						})
 					}
 				}
 			}

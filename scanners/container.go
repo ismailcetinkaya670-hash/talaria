@@ -158,6 +158,18 @@ func ScanDBusPolicy() ([]DBusPolicyResult, error) {
 
 	configDirs := []string{"/etc/dbus-1/system.d", "/usr/share/dbus-1/system.d"}
 
+	// Pre-fetch user info once outside the loop
+	currUser, err := user.Current()
+	if err != nil {
+		return results, err
+	}
+	uid, _ := strconv.Atoi(currUser.Uid)
+	gids := make(map[int]bool)
+	for _, g := range func() []string { gs, _ := currUser.GroupIds(); return gs }() {
+		id, _ := strconv.Atoi(g)
+		gids[id] = true
+	}
+
 	for _, dir := range configDirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -170,64 +182,36 @@ func ScanDBusPolicy() ([]DBusPolicyResult, error) {
 			}
 
 			filePath := dir + "/" + entry.Name()
-			data, err := os.ReadFile(filePath)
+
+			// NOTE: '<allow send_destination="..."/>' without user= is the STANDARD
+			// pattern for EVERY D-Bus service on Linux (avahi, NetworkManager, bluetooth
+			// etc.). It is intentional design — security is enforced by polkit, not D-Bus
+			// allow tags. Scanning for it produces 40+ false positives on any desktop.
+			// The only truly exploitable condition is a *writable* config file.
+			info, err := os.Stat(filePath)
 			if err != nil {
 				continue
 			}
-			content := string(data)
-
-			// Look for permissive allow rules without user restrictions
-			// A rule like <allow send_destination="..."/> without a user= attribute is dangerous
-			isDangerous := false
-			reason := ""
-
-			lines := strings.Split(content, "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				// Check for overly permissive allow rules
-				if strings.Contains(line, "<allow") &&
-					!strings.Contains(line, "user=") &&
-					!strings.Contains(line, "group=") &&
-					(strings.Contains(line, "send_destination") || strings.Contains(line, "receive_sender")) {
-					isDangerous = true
-					reason = "Permissive D-Bus allow rule without user/group restriction: " + line
-					break
-				}
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			if !ok {
+				continue
+			}
+			mode := stat.Mode
+			fileWritable := false
+			if uid == int(stat.Uid) && (mode&syscall.S_IWUSR != 0) {
+				fileWritable = true
+			} else if gids[int(stat.Gid)] && (mode&syscall.S_IWGRP != 0) {
+				fileWritable = true
+			} else if mode&syscall.S_IWOTH != 0 {
+				fileWritable = true
 			}
 
-			// Also check write permissions on config file itself
-			currUser, _ := user.Current()
-			uid, _ := strconv.Atoi(currUser.Uid)
-			gids := make(map[int]bool)
-			for _, g := range func() []string { gs, _ := currUser.GroupIds(); return gs }() {
-				id, _ := strconv.Atoi(g)
-				gids[id] = true
-			}
-
-			if info, err := os.Stat(filePath); err == nil {
-				if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-					mode := stat.Mode
-					fileWritable := false
-					if uid == int(stat.Uid) && (mode&syscall.S_IWUSR != 0) {
-						fileWritable = true
-					} else if gids[int(stat.Gid)] && (mode&syscall.S_IWGRP != 0) {
-						fileWritable = true
-					} else if mode&syscall.S_IWOTH != 0 {
-						fileWritable = true
-					}
-					if fileWritable {
-						isDangerous = true
-						reason = "D-Bus config file is writable: modify policy to allow privileged method calls"
-					}
-				}
-			}
-
-			if isDangerous {
+			if fileWritable {
 				results = append(results, DBusPolicyResult{
 					ConfigFile:  filePath,
 					ServiceName: strings.TrimSuffix(entry.Name(), ".conf"),
 					IsDangerous: true,
-					Reason:      reason,
+					Reason:      "D-Bus config file is writable: can modify policy to allow unprivileged access to privileged service methods",
 				})
 			}
 		}
